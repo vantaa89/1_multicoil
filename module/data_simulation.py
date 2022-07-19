@@ -113,7 +113,8 @@ class SimulatedDataset(Dataset):
         image_kspace = np.fft.fftn(image, axes=(0, 1))
         corrupted_multicoil_kspace[:PE_occurred,:,:] = image_kspace[:PE_occurred,:,:]
         corrupted_multicoil_kspace[PE_occurred:,:,:] = postmotion_multicoil_kspace[PE_occurred:,:,:]
-        corrupted_dicom_kspace = np.fft.fft2(np.sqrt((abs(np.fft.ifftn(corrupted_multicoil_kspace, axes=(0, 1)))**2).sum(axis=-1)))
+        # corrupted_dicom_kspace = np.fft.fft2(np.sqrt((abs(np.fft.ifftn(corrupted_multicoil_kspace, axes=(0, 1)))**2).sum(axis=-1)))               ---> RSS
+        corrupted_dicom_kspace = (np.conjugate(sens_map) * corrupted_multicoil_kspace).sum(axis=-1)   # multiplying conjuated sens_map and take coil-sum
         
         # add noise
         snr_min, snr_max = determined_motion_params['SNR_range']
