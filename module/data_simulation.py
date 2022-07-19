@@ -5,6 +5,7 @@ from scipy.io import loadmat
 import os
 from scipy.ndimage import rotate as rot
 from copy import deepcopy
+import matplotlib.pyplot as plt
 
 class MotionParameters:
     def __init__(self, img_size, SNR, lb, ub, PE_ran, rot = 0.5, flip=0):
@@ -84,37 +85,38 @@ class SimulatedDataset(Dataset):
                 self.sensmap_paths.append(os.path.join(sensmap_path, sensmap_file))
         self.image_paths.sort()
         self.sensmap_paths.sort()
-        self.len = len(self.image_paths) * slices # slices: 한 mat 파일에 들어있는 slice의 개수. 여기서는 16
+        self.len = len(self.image_paths)
         
         self.params = deepcopy(params)
         self.img_size = self.params.img_size
         
     def __getitem__(self, idx):
         # out dataset dimension: 224 x 224 x 16 x 7 x 32
-        image = loadmat(self.image_paths[(idx//self.multiple)//self.slices])['uncomb_img'][:,:,(idx//self.multiple)%self.slices,0,:]              # only leave the first contrast
-        sens_map = loadmat(self.sensmap_paths[(idx//self.multiple)//self.slices])['sensitivity'][:,:,(idx//self.multiple)%self.slices,0,:]        # image domain
+        image = loadmat(self.image_paths[idx%self.len])['uncomb_img'][:,:,:,0,:]              # leave only the first echo
+        sens_map = loadmat(self.sensmap_paths[idx%self.len])['sensitivity'][:,:,:,0,:]        
         
-        assert len(image.shape) == 3                      # 3D, (224, 224, 32)
-        dicom_image = (image/sens_map).mean(axis=2)        # shape: (224, 224)
+        assert len(image.shape) == 4                      # 4D, (224, 224, 16, 32). 32: coil
+        dicom_image = (image * np.conj(sens_map)).sum(axis=-1) # (224, 224, 16)
         
-        determined_motion_params = self.params.get_parameters()
-        
-        postmotion_dicom = deepcopy(dicom_image)
-        postmotion_dicom = self.apply_motion(postmotion_dicom, determined_motion_params)
-        
-        
-        postmotion_multicoil = np.repeat(postmotion_dicom[:,:,np.newaxis], 32, axis=2) * sens_map        # image domain, corrupted multicoil
-        
-
-        # output array: k-space partition composed of postmotion_multicoil and image
-        corrupted_multicoil_kspace = np.zeros_like(postmotion_multicoil)        # dimension: (224, 224, 32)
-        PE_occurred = determined_motion_params['PE_occurred']                   # location where the motion occurred
-        postmotion_multicoil_kspace = np.fft.fftn(postmotion_multicoil, axes=(0, 1))
+        num_layers = dicom_image.shape[-1]
+        PE_occurred = []
         image_kspace = np.fft.fftn(image, axes=(0, 1))
-        corrupted_multicoil_kspace[:PE_occurred,:,:] = image_kspace[:PE_occurred,:,:]
-        corrupted_multicoil_kspace[PE_occurred:,:,:] = postmotion_multicoil_kspace[PE_occurred:,:,:]
-        # corrupted_dicom_kspace = np.fft.fft2(np.sqrt((abs(np.fft.ifftn(corrupted_multicoil_kspace, axes=(0, 1)))**2).sum(axis=-1)))               ---> RSS
-        corrupted_dicom_kspace = (np.conjugate(sens_map) * corrupted_multicoil_kspace).sum(axis=-1)   # multiplying conjuated sens_map and take coil-sum
+        
+        
+        corrupted_multicoil_kspace = np.zeros_like(image_kspace)
+        
+        for i in range(num_layers): # apply different motion parameters to each coil
+            determined_motion_params = self.params.get_parameters()
+            PE_occurred.append(determined_motion_params['PE_occurred'])
+
+            postmotion_dicom = self.apply_motion(deepcopy(dicom_image[:,:,i]), determined_motion_params) # (224, 224)
+            postmotion_multicoil = np.einsum('xy,xyc->xyc', postmotion_dicom, sens_map[:,:,i,:]) # (224, 224, 32). single layer
+            postmotion_multicoil_kspace = np.fft.fftn(postmotion_multicoil, axes=(0, 1))
+            
+            corrupted_multicoil_kspace[:PE_occurred[i],:,i,:] = image_kspace[:PE_occurred[i],:,i,:]
+            corrupted_multicoil_kspace[PE_occurred[i]:,:,i,:] = postmotion_multicoil_kspace[PE_occurred[i]:,:,:]
+            
+        corrupted_dicom_kspace = np.fft.fftn((np.conjugate(sens_map) * np.fft.ifftn(corrupted_multicoil_kspace, axes=(0, 1))).sum(axis=-1), axes=(0, 1))   # multiplying conjuated sens_map and take coil-sum
         
         # add noise
         snr_min, snr_max = determined_motion_params['SNR_range']
@@ -158,15 +160,7 @@ class SimulatedDataset(Dataset):
         #after_k_data = np.zeros(k_data.shape)
         #after_k_data[:,PE_occurred:] = k_data[:,PE_occurred]
         
-        k_data = np.fft.fftn(image,axes=(0,1)) * np.fft.ifftshift(phase ,axes=(0,1))
-        # k_data = k_data * 10000 / np.sqrt(np.sum(np.abs(k_data)**2, axis=(0,1), keepdims = True)) # normalize######################
-        
-        
-        
-#         ref_images = np.zeros((image.shape + (2,)),dtype=np.float32)
-#         ref_images[..., 0] = np.real(k_data)
-#         ref_images[..., 1] = np.imag(k_data)
-        
+        k_data = np.fft.fftn(image, axes=(0,1)) * np.fft.ifftshift(phase, axes=(0,1))
         return np.fft.ifft2(k_data)
         
     def __len__(self):
