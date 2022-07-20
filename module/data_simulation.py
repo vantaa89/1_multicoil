@@ -113,9 +113,10 @@ class SimulatedDataset(Dataset):
             postmotion_multicoil = np.einsum('xy,xyc->xyc', postmotion_dicom, sens_map[:,:,i,:]) # (224, 224, 32). single layer
             postmotion_multicoil_kspace = np.fft.fftn(postmotion_multicoil, axes=(0, 1))
             
-            corrupted_multicoil_kspace[:PE_occurred[i],:,i,:] = image_kspace[:PE_occurred[i],:,i,:]
-            corrupted_multicoil_kspace[PE_occurred[i]:,:,i,:] = postmotion_multicoil_kspace[PE_occurred[i]:,:,:]
-            
+            corrupted_multicoil_kspace[:PE_occurred[i],:,i,:] = np.fft.fftshift(image_kspace, axes=(0, 1))[:PE_occurred[i],:,i,:]
+            corrupted_multicoil_kspace[PE_occurred[i]:,:,i,:] = np.fft.fftshift(postmotion_multicoil_kspace, axes=(0, 1))[PE_occurred[i]:,:,:]
+        
+        corrupted_multicoil_kspace = np.fft.ifftshift(corrupted_multicoil_kspace, axes=(0, 1))
         corrupted_dicom_kspace = np.fft.fftn((np.conjugate(sens_map) * np.fft.ifftn(corrupted_multicoil_kspace, axes=(0, 1))).sum(axis=-1), axes=(0, 1))   # multiplying conjuated sens_map and take coil-sum
         
         # add noise

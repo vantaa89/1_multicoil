@@ -109,14 +109,14 @@ class SimulatedDataset(Dataset):
             determined_motion_params = self.params.get_parameters()
             PE_occurred.append(determined_motion_params['PE_occurred'])
 
-            postmotion_dicom = deepcopy(dicom_image[:,:,i])
-            postmotion_dicom = self.apply_motion(postmotion_dicom, determined_motion_params) # (224, 224)
+            postmotion_dicom = self.apply_motion(deepcopy(dicom_image[:,:,i]), determined_motion_params) # (224, 224)
             postmotion_multicoil = np.einsum('xy,xyc->xyc', postmotion_dicom, sens_map[:,:,i,:]) # (224, 224, 32). single layer
             postmotion_multicoil_kspace = np.fft.fftn(postmotion_multicoil, axes=(0, 1))
             
-            corrupted_multicoil_kspace[:PE_occurred[i],:,i,:] = image_kspace[:PE_occurred[i],:,i,:]
-            corrupted_multicoil_kspace[PE_occurred[i]:,:,i,:] = postmotion_multicoil_kspace[PE_occurred[i]:,:,:]
-            
+            corrupted_multicoil_kspace[:PE_occurred[i],:,i,:] = np.fft.fftshift(image_kspace, axes=(0, 1))[:PE_occurred[i],:,i,:]
+            corrupted_multicoil_kspace[PE_occurred[i]:,:,i,:] = np.fft.fftshift(postmotion_multicoil_kspace, axes=(0, 1))[PE_occurred[i]:,:,:]
+        
+        corrupted_multicoil_kspace = np.fft.ifftshift(corrupted_multicoil_kspace, axes=(0, 1))
         corrupted_dicom_kspace = np.fft.fftn((np.conjugate(sens_map) * np.fft.ifftn(corrupted_multicoil_kspace, axes=(0, 1))).sum(axis=-1), axes=(0, 1))   # multiplying conjuated sens_map and take coil-sum
         
         # add noise
@@ -161,15 +161,7 @@ class SimulatedDataset(Dataset):
         #after_k_data = np.zeros(k_data.shape)
         #after_k_data[:,PE_occurred:] = k_data[:,PE_occurred]
         
-        k_data = np.fft.fftn(image,axes=(0,1)) * np.fft.ifftshift(phase ,axes=(0,1))
-        # k_data = k_data * 10000 / np.sqrt(np.sum(np.abs(k_data)**2, axis=(0,1), keepdims = True)) # normalize######################
-        
-        
-        
-#         ref_images = np.zeros((image.shape + (2,)),dtype=np.float32)
-#         ref_images[..., 0] = np.real(k_data)
-#         ref_images[..., 1] = np.imag(k_data)
-        
+        k_data = np.fft.fftn(image, axes=(0,1)) * np.fft.ifftshift(phase, axes=(0,1))
         return np.fft.ifft2(k_data)
         
     def __len__(self):
